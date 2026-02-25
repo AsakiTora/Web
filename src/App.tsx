@@ -381,21 +381,23 @@ export default function App() {
     // Optimistic update
     setSelectedAppointment(prev => {
       if (!prev) return null;
+      const updatedDates = prev.dates?.map(d => {
+        if (d.id === dateId) {
+          const currentVoters = d.voters ? d.voters.split(',') : [];
+          if (currentVoters.includes(userName)) {
+            return {
+              ...d,
+              vote_count: Math.max(0, d.vote_count - 1),
+              voters: currentVoters.filter(v => v !== userName).join(',')
+            };
+          }
+        }
+        return d;
+      });
+
       return {
         ...prev,
-        dates: prev.dates?.map(d => {
-          if (d.id === dateId) {
-            const currentVoters = d.voters ? d.voters.split(',') : [];
-            if (currentVoters.includes(userName)) {
-              return {
-                ...d,
-                vote_count: Math.max(0, d.vote_count - 1),
-                voters: currentVoters.filter(v => v !== userName).join(',')
-              };
-            }
-          }
-          return d;
-        })
+        dates: updatedDates?.filter(d => d.vote_count > 0)
       };
     });
 
@@ -407,6 +409,38 @@ export default function App() {
 
     if (!res.ok) {
       fetchAppointmentDetails(selectedAppointment!.id);
+    }
+  };
+
+  const handleToggleVote = async (day: Date) => {
+    if (!selectedAppointment) return;
+    if (!userName.trim()) {
+      alert('Vui lòng nhập tên của bạn!');
+      return;
+    }
+    
+    const dateStr = format(day, 'yyyy-MM-dd');
+    let appDate = selectedAppointment.dates?.find(d => d.date === dateStr);
+
+    if (!appDate) {
+      const res = await fetch(`/api/appointments/${selectedAppointment.id}/dates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: dateStr }),
+      });
+      if (res.ok) {
+        const newData = await res.json();
+        if (newData && newData.id) {
+          handleVote(newData.id);
+        }
+      }
+    } else {
+      const hasVoted = appDate.voters?.split(',').includes(userName);
+      if (hasVoted) {
+        handleUnvote(appDate.id);
+      } else {
+        handleVote(appDate.id);
+      }
     }
   };
 
@@ -854,9 +888,9 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-7 gap-4">
-                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
-                    <div key={day} className="py-2 text-center text-[11px] font-extrabold text-brand-dark uppercase tracking-[0.2em]">
+                <div className="grid grid-cols-7 gap-1 md:gap-4">
+                  {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map(day => (
+                    <div key={day} className="py-2 text-center text-[9px] md:text-[11px] font-extrabold text-brand-dark uppercase tracking-widest">
                       {day}
                     </div>
                   ))}
@@ -869,87 +903,35 @@ export default function App() {
                     return (
                       <motion.div
                         key={i}
-                        onClick={() => {
-                          setSelectedDate(day);
-                          if (!appDate) handleAddDate(day);
-                        }}
+                        onClick={() => setSelectedDate(day)}
+                        onDoubleClick={() => handleToggleVote(day)}
                         animate={highlightDate === dateStr ? {
                           scale: [1, 1.05, 1],
                           backgroundColor: ['#FFFBEB', '#F59E0B', '#FFFBEB'],
                           transition: { duration: 0.5, repeat: 2 }
                         } : {}}
                         className={cn(
-                          "relative aspect-square md:aspect-auto md:h-32 bg-brand-paper rounded-2xl p-3 cursor-pointer transition-all hover:scale-[1.02] hover:shadow-xl hover:shadow-brand-dark/5 group/cell border border-transparent",
+                          "relative min-h-[60px] md:h-24 bg-brand-paper rounded-xl md:rounded-2xl p-2 md:p-3 cursor-pointer transition-all hover:scale-[1.02] hover:shadow-xl hover:shadow-brand-dark/5 group/cell border border-transparent flex flex-col items-center justify-center gap-1",
                           !isCurrentMonth && "opacity-20 grayscale",
-                          isSelected && "ring-2 ring-brand-gold ring-offset-4 ring-offset-white z-20 border-brand-gold/20 shadow-2xl shadow-brand-gold/10"
+                          isSelected && "ring-2 ring-brand-gold ring-offset-2 md:ring-offset-4 ring-offset-white z-20 border-brand-gold/20 shadow-2xl shadow-brand-gold/10",
+                          appDate && appDate.voters?.split(',').includes(userName) && "bg-brand-gold/10 border-brand-gold/30"
                         )}
                       >
-                        <div className="flex justify-between items-start">
-                          <span className={cn(
-                            "text-base font-extrabold w-9 h-9 flex items-center justify-center rounded-xl transition-colors",
-                            isToday(day) && "bg-brand-dark text-brand-gold shadow-lg shadow-brand-dark/20",
-                            !isToday(day) && isCurrentMonth && "text-brand-dark group-hover/cell:text-brand-dark",
-                          )}>
-                            {format(day, 'd')}
-                          </span>
-                          {appDate && (
-                            <div className={cn(
-                              "text-xs px-2.5 py-1 rounded-lg font-extrabold border shadow-sm",
-                              getVoteLevel(appDate.vote_count) || "bg-white text-brand-dark/40 border-brand-dark/5"
-                            )}>
-                              {appDate.vote_count}
-                            </div>
-                          )}
-                        </div>
-
+                        <span className={cn(
+                          "text-sm md:text-lg font-extrabold w-8 h-8 md:w-10 md:h-10 flex items-center justify-center rounded-lg md:rounded-xl transition-colors",
+                          isToday(day) && "bg-brand-dark text-brand-gold shadow-lg shadow-brand-dark/20",
+                          !isToday(day) && isCurrentMonth && "text-brand-dark group-hover/cell:text-brand-dark",
+                          appDate && appDate.voters?.split(',').includes(userName) && "text-brand-gold bg-brand-dark"
+                        )}>
+                          {format(day, 'd')}
+                        </span>
+                        
                         {appDate && (
-                          <div className="mt-3 space-y-2">
-                            <div className="flex flex-wrap gap-1">
-                              {appDate.voters?.split(',').slice(0, 2).map((voter, idx) => (
-                                <span key={idx} className="text-[9px] bg-white/50 px-1.5 py-0.5 rounded-md text-brand-dark/60 font-medium border border-brand-dark/5">
-                                  {voter}
-                                </span>
-                              ))}
-                              {(appDate.voters?.split(',').length || 0) > 2 && (
-                                <span className="text-[9px] text-brand-dark/20 font-bold">+{appDate.voters!.split(',').length - 2}</span>
-                              )}
-                            </div>
-                            
-                            <div className="absolute bottom-3 right-3 flex gap-1.5 opacity-0 group-hover/cell:opacity-100 transition-all translate-y-2 group-hover/cell:translate-y-0">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRemoveDate(appDate.id);
-                                }}
-                                className="w-8 h-8 bg-white text-brand-dark/20 rounded-lg hover:text-red-500 hover:bg-red-50 transition-all border border-brand-dark/5 shadow-sm flex items-center justify-center"
-                                title="Bỏ chọn ngày"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                              {appDate.voters?.split(',').includes(userName) ? (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleUnvote(appDate.id);
-                                  }}
-                                  className="w-8 h-8 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-all border border-red-100 shadow-sm flex items-center justify-center"
-                                  title="Huỷ vote"
-                                >
-                                  <X size={14} />
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleVote(appDate.id);
-                                  }}
-                                  className="w-8 h-8 bg-brand-gold text-brand-dark rounded-lg hover:scale-110 active:scale-95 transition-all shadow-lg shadow-brand-gold/20 flex items-center justify-center"
-                                  title="Vote"
-                                >
-                                  <Check size={14} strokeWidth={3} />
-                                </button>
-                              )}
-                            </div>
+                          <div className={cn(
+                            "text-[10px] md:text-xs px-2 py-0.5 rounded-full font-black border shadow-sm",
+                            getVoteLevel(appDate.vote_count) || "bg-white text-brand-dark/40 border-brand-dark/5"
+                          )}>
+                            {appDate.vote_count}
                           </div>
                         )}
                       </motion.div>

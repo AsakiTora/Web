@@ -262,6 +262,13 @@ app.post("/api/votes", (req, res) => {
 app.delete("/api/votes", (req, res) => {
   const { dateId, userName, appointmentId } = req.body;
   db.prepare("DELETE FROM votes WHERE date_id = ? AND user_name = ?").run(dateId, userName);
+  
+  // Check if any votes left for this date
+  const votesLeft = db.prepare("SELECT COUNT(*) as count FROM votes WHERE date_id = ?").get(dateId);
+  if (votesLeft.count === 0) {
+    db.prepare("DELETE FROM appointment_dates WHERE id = ?").run(dateId);
+  }
+  
   broadcast({ type: "VOTE_UPDATED", payload: { appointmentId: parseInt(appointmentId) } });
   res.json({ success: true });
 });
