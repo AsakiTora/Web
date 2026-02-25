@@ -206,12 +206,16 @@ app.delete("/api/venue_votes", (req, res) => {
 });
 
 app.post("/api/appointments/:id/finalize", (req, res) => {
-  const { dateId, venueId } = req.body;
+  const { dateId, venueId, password } = req.body;
   const appointmentId = parseInt(req.params.id);
 
-  const appointment = db.prepare("SELECT id FROM appointments WHERE id = ?").get(appointmentId);
+  const appointment = db.prepare("SELECT password FROM appointments WHERE id = ?").get(appointmentId);
   if (!appointment) return res.status(404).json({ error: "Not found" });
   
+  if (appointment.password && appointment.password !== password) {
+    return res.status(403).json({ error: "Incorrect password" });
+  }
+
   db.prepare("UPDATE appointments SET is_finalized = 1, final_date_id = ?, final_venue_id = ? WHERE id = ?")
     .run(dateId, venueId, appointmentId);
   

@@ -90,6 +90,7 @@ export default function App() {
   const [isFinalizeModalOpen, setIsFinalizeModalOpen] = useState(false);
   const [finalDateId, setFinalDateId] = useState<number | null>(null);
   const [finalVenueId, setFinalVenueId] = useState<number | null>(null);
+  const [finalizePassword, setFinalizePassword] = useState('');
 
   // Modal states
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -282,10 +283,14 @@ export default function App() {
     const res = await fetch(`/api/appointments/${selectedAppointment.id}/finalize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dateId: finalDateId, venueId: finalVenueId }),
+      body: JSON.stringify({ dateId: finalDateId, venueId: finalVenueId, password: finalizePassword }),
     });
     if (res.ok) {
       setIsFinalizeModalOpen(false);
+      setFinalizePassword('');
+      // Manually refresh to be sure, although WS should handle it
+      fetchAppointmentDetails(selectedAppointment.id);
+      fetchAppointments();
     } else {
       const error = await res.json();
       alert(error.error || 'Lỗi chốt lịch');
@@ -1169,6 +1174,17 @@ export default function App() {
                       ))}
                     </select>
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest font-extrabold text-brand-dark/30 mb-2">Mật khẩu xác nhận (mật khẩu khi tạo lịch)</label>
+                  <input
+                    type="password"
+                    placeholder="Nhập mật khẩu..."
+                    className="w-full px-5 py-4 bg-brand-paper rounded-2xl border border-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold transition-all font-bold"
+                    value={finalizePassword}
+                    onChange={(e) => setFinalizePassword(e.target.value)}
+                  />
                 </div>
                 
                 <div className="flex gap-3 pt-2">
