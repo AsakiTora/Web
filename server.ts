@@ -18,6 +18,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS appointments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
+    password TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -38,6 +39,13 @@ db.exec(`
   );
 `);
 
+// Migration: Add password column if it doesn't exist
+try {
+  db.exec("ALTER TABLE appointments ADD COLUMN password TEXT;");
+} catch (e) {
+  // Column already exists or other error we can ignore if it's just "duplicate column"
+}
+
 app.use(express.json());
 
 // Broadcast to all clients
@@ -52,29 +60,73 @@ function broadcast(data: any) {
 
 // API Routes
 app.get("/api/appointments", (req, res) => {
-  const appointments = db.prepare("SELECT * FROM appointments ORDER BY created_at DESC").all();
+  const appointments = db.prepare("SELECT id, title, created_at FROM appointments ORDER BY created_at DESC").all();
   res.json(appointments);
 });
 
 app.post("/api/appointments", (req, res) => {
-  const { title } = req.body;
-  if (!title) return res.status(400).json({ error: "Title is required" });
-  
-  const info = db.prepare("INSERT INTO appointments (title) VALUES (?)").run(title);
-  const newAppointment = { id: info.lastInsertRowid, title };
-  broadcast({ type: "APPOINTMENT_CREATED", payload: newAppointment });
-  res.json(newAppointment);
+  try {
+    const { title, password } = req.body;
+    if (!title) return res.status(400).json({ error: "Title is required" });
+    
+    const info = db.prepare("INSERT INTO appointments (title, password) VALUES (?, ?)").run(title, password || null);
+    const newAppointment = { id: Number(info.lastInsertRowid), title };
+    broadcast({ type: "APPOINTMENT_CREATED", payload: newAppointment });
+    res.json(newAppointment);
+  } catch (error: any) {
+    console.error("[API] Error creating appointment:", error);
+    res.status(500).json({ error: error.message || "Internal server error" });
+  }
 });
 
 app.delete("/api/appointments/:id", (req, res) => {
-  db.prepare("DELETE FROM appointments WHERE id = ?").run(req.params.id);
-  broadcast({ type: "APPOINTMENT_DELETED", payload: { id: parseInt(req.params.id) } });
-  res.json({ success: true });
+  try {
+    const { id } = req.params;
+    const { password } = req.body;
+    
+    // Use Number() for stricter parsing, but fallback to raw id if needed
+    const numericId = Number(id);
+
+    console.log(`[API] Delete request for ID: "${id}" (parsed as: ${numericId})`);
+
+    if (isNaN(numericId)) {
+      return res.status(400).json({ error: "Invalid appointment ID" });
+    }
+
+    const appointment = db.prepare("SELECT password FROM appointments WHERE id = ?").get(numericId);
+    
+    if (!appointment) {
+      console.log(`[API] Appointment ${numericId} not found in database. Current IDs:`, 
+        db.prepare("SELECT id FROM appointments LIMIT 5").all());
+      return res.status(404).json({ error: "Appointment not found" });
+    }
+    
+    const dbPassword = appointment.password || "";
+    const inputPassword = password || "";
+
+    console.log(`[API] DB Password: "${dbPassword}", Input Password: "${inputPassword}"`);
+
+    // If a password exists in DB, it must match the input
+    if (dbPassword !== "" && dbPassword !== inputPassword) {
+      console.log(`[API] Incorrect password for appointment ${numericId}`);
+      return res.status(403).json({ error: "Incorrect password" });
+    }
+
+    const result = db.prepare("DELETE FROM appointments WHERE id = ?").run(numericId);
+    console.log(`[API] Deleted ${result.changes} rows for appointment ${numericId}`);
+    
+    broadcast({ type: "APPOINTMENT_DELETED", payload: { id: numericId } });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("[API] Error deleting appointment:", error);
+    res.status(500).json({ error: error.message || "Internal server error" });
+  }
 });
 
 app.get("/api/appointments/:id", (req, res) => {
-  const appointment = db.prepare("SELECT * FROM appointments WHERE id = ?").get(req.params.id);
-  if (!appointment) return res.status(404).json({ error: "Not found" });
+  const numericId = parseInt(req.params.id);
+  const appointment = db.prepare("SELECT id, title, created_at FROM appointments WHERE id = ?").get(numericId);
+  if (!appointment) return res.status(404).json({ error: "Appointment not found" });
 
   const dates = db.prepare(`
     SELECT ad.*, 
@@ -82,19 +134,19 @@ app.get("/api/appointments/:id", (req, res) => {
     (SELECT GROUP_CONCAT(user_name) FROM votes v WHERE v.date_id = ad.id) as voters
     FROM appointment_dates ad 
     WHERE ad.appointment_id = ?
-  `).all(req.params.id);
+  `).all(numericId);
 
   res.json({ ...appointment, dates });
 });
 
 app.post("/api/appointments/:id/dates", (req, res) => {
   const { date } = req.body;
-  const appointmentId = req.params.id;
+  const appointmentId = parseInt(req.params.id);
   
   try {
     const info = db.prepare("INSERT INTO appointment_dates (appointment_id, date) VALUES (?, ?)").run(appointmentId, date);
-    const newDate = { id: info.lastInsertRowid, appointment_id: parseInt(appointmentId), date, vote_count: 0, voters: null };
-    broadcast({ type: "DATE_ADDED", payload: { appointmentId: parseInt(appointmentId), date: newDate } });
+    const newDate = { id: info.lastInsertRowid, appointment_id: appointmentId, date, vote_count: 0, voters: null };
+    broadcast({ type: "DATE_ADDED", payload: { appointmentId: appointmentId, date: newDate } });
     res.json(newDate);
   } catch (e) {
     res.status(400).json({ error: "Date already exists for this appointment" });
@@ -102,11 +154,11 @@ app.post("/api/appointments/:id/dates", (req, res) => {
 });
 
 app.delete("/api/appointments/:id/dates/:dateId", (req, res) => {
-  const { id, dateId } = req.params;
-  console.log(`[API] Deleting date ${dateId} from appointment ${id}`);
-  const result = db.prepare("DELETE FROM appointment_dates WHERE id = ? AND appointment_id = ?").run(dateId, id);
-  console.log(`[API] Deleted ${result.changes} rows`);
-  broadcast({ type: "DATE_REMOVED", payload: { appointmentId: parseInt(id) } });
+  const appointmentId = parseInt(req.params.id);
+  const dateId = parseInt(req.params.dateId);
+  
+  db.prepare("DELETE FROM appointment_dates WHERE id = ? AND appointment_id = ?").run(dateId, appointmentId);
+  broadcast({ type: "DATE_REMOVED", payload: { appointmentId: appointmentId } });
   res.json({ success: true });
 });
 

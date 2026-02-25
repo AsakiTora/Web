@@ -65,8 +65,16 @@ export default function App() {
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [userName, setUserName] = useState<string>(localStorage.getItem('voter_name') || '');
   const [newAppointmentTitle, setNewAppointmentTitle] = useState('');
+  const [newAppointmentPassword, setNewAppointmentPassword] = useState('');
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  
+  // Modal states
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [appointmentToDelete, setAppointmentToDelete] = useState<number | null>(null);
+  const [highlightDate, setHighlightDate] = useState<string | null>(null);
 
   // Fetch appointments list
   const fetchAppointments = async () => {
@@ -77,9 +85,18 @@ export default function App() {
 
   // Fetch specific appointment details
   const fetchAppointmentDetails = async (id: number) => {
-    const res = await fetch(`/api/appointments/${id}`);
-    const data = await res.json();
-    setSelectedAppointment(data);
+    try {
+      const res = await fetch(`/api/appointments/${id}`);
+      const data = await res.json();
+      if (res.ok) {
+        setSelectedAppointment(data);
+      } else {
+        console.error('Error fetching details:', data.error);
+        setSelectedAppointment(null);
+      }
+    } catch (error) {
+      console.error('Network error fetching details:', error);
+    }
   };
 
   useEffect(() => {
@@ -92,16 +109,9 @@ export default function App() {
     ws.onmessage = (event) => {
       const { type, payload } = JSON.parse(event.data);
       
-      // Use a functional update or a way to get the latest state if needed, 
-      // but here we can just check the payload and trigger fetches.
       if (type === 'APPOINTMENT_CREATED' || type === 'APPOINTMENT_DELETED') {
         fetchAppointments();
       } 
-      
-      // We always fetch details if the payload matches the current selection
-      // To avoid stale closures, we can use the state setter's functional update 
-      // to check the current ID, but since we want to trigger a fetch, 
-      // we'll just use a ref-like approach or a more robust effect.
     };
 
     return () => ws.close();
@@ -130,22 +140,70 @@ export default function App() {
     return () => ws.close();
   }, [selectedAppointment?.id]);
 
-  const handleCreateAppointment = async (e: React.FormEvent) => {
+  const handleCreateAppointment = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAppointmentTitle.trim()) return;
-    const res = await fetch('/api/appointments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: newAppointmentTitle }),
-    });
-    if (res.ok) {
-      setNewAppointmentTitle('');
+    setIsCreateModalOpen(true);
+  };
+
+  const confirmCreate = async () => {
+    try {
+      const res = await fetch('/api/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          title: newAppointmentTitle,
+          password: newAppointmentPassword.trim() || null
+        }),
+      });
+      if (res.ok) {
+        setNewAppointmentTitle('');
+        setNewAppointmentPassword('');
+        setIsCreateModalOpen(false);
+      } else {
+        const error = await res.json();
+        alert(error.error || 'Không thể tạo buổi hẹn.');
+      }
+    } catch (error) {
+      alert('Lỗi kết nối máy chủ.');
     }
   };
 
-  const handleDeleteAppointment = async (id: number) => {
-    if (!confirm('Bạn có chắc muốn xoá buổi hẹn này?')) return;
-    await fetch(`/api/appointments/${id}`, { method: 'DELETE' });
+  const handleDeleteAppointment = (id: number) => {
+    setAppointmentToDelete(id);
+    setPasswordInput('');
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (appointmentToDelete === null || appointmentToDelete === undefined) return;
+
+    try {
+      const res = await fetch(`/api/appointments/${appointmentToDelete}`, { 
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordInput })
+      });
+
+      if (res.ok) {
+        setIsDeleteModalOpen(false);
+        setAppointmentToDelete(null);
+        setPasswordInput('');
+      } else {
+        const error = await res.json();
+        alert(error.error || 'Không thể xoá buổi hẹn.');
+      }
+    } catch (error) {
+      alert('Lỗi kết nối máy chủ khi xoá.');
+    }
+  };
+
+  const handleSuggestedDateClick = (dateStr: string) => {
+    const date = parseISO(dateStr);
+    setCurrentMonth(date);
+    setSelectedDate(date);
+    setHighlightDate(dateStr);
+    setTimeout(() => setHighlightDate(null), 2000);
   };
 
   const handleAddDate = async (date: Date) => {
@@ -290,36 +348,75 @@ export default function App() {
   }, [selectedAppointment?.dates]);
 
   return (
-    <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans p-4 md:p-8">
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
+    <div className="min-h-screen bg-brand-paper text-brand-dark font-sans selection:bg-brand-gold/20">
+      {/* Top Navigation / Logo Bar */}
+      <header className="border-b border-brand-dark/5 bg-white/80 backdrop-blur-md sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-brand-dark rounded-xl flex items-center justify-center text-brand-gold shadow-lg shadow-brand-dark/10">
+              <Beer size={28} strokeWidth={1.5} />
+            </div>
+            <div>
+              <h1 className="grit-logo text-3xl leading-none tracking-tight">Grit</h1>
+              <p className="text-[11px] uppercase tracking-[0.2em] font-extrabold text-brand-gold">Bia và Rượu</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="relative group">
+              <Users className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-dark/30 w-4 h-4 group-focus-within:text-brand-gold transition-colors" />
+              <input
+                type="text"
+                placeholder="Tên của bạn..."
+                className="pl-10 pr-4 py-2.5 bg-brand-paper border border-brand-dark/5 rounded-full focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold text-sm transition-all w-40 md:w-64 font-bold"
+                value={userName}
+                onChange={(e) => setUserName(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* Sidebar: Appointments List */}
         <div className="lg:col-span-4 space-y-6">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-black/5">
-            <div className="flex items-center gap-2 mb-6">
-              <Beer className="w-6 h-6 text-emerald-600" />
-              <h1 className="text-xl font-bold tracking-tight">Lịch Nhậu</h1>
+          <div className="bg-white rounded-3xl p-6 shadow-xl shadow-brand-dark/5 border border-brand-dark/5">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-sm font-extrabold uppercase tracking-widest text-brand-dark">Cuộc hẹn của bạn</h2>
+              <div className="w-8 h-8 rounded-full bg-brand-paper flex items-center justify-center border border-brand-dark/5">
+                <Plus size={14} className="text-brand-dark/40" />
+              </div>
             </div>
 
-            <form onSubmit={handleCreateAppointment} className="mb-6">
+            <form onSubmit={handleCreateAppointment} className="mb-8 space-y-3">
               <div className="relative">
                 <input
                   type="text"
                   placeholder="Tên buổi hẹn mới..."
-                  className="w-full pl-4 pr-12 py-3 bg-[#F5F5F0] rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                  className="w-full pl-5 pr-5 py-4 bg-brand-paper rounded-2xl border border-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold transition-all placeholder:text-brand-dark/20 font-bold"
                   value={newAppointmentTitle}
                   onChange={(e) => setNewAppointmentTitle(e.target.value)}
                 />
+              </div>
+              <div className="relative flex gap-2">
+                <input
+                  type="password"
+                  placeholder="Mật khẩu xoá (tuỳ chọn)..."
+                  className="flex-1 pl-5 pr-5 py-3 bg-brand-paper rounded-2xl border border-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold transition-all placeholder:text-brand-dark/20 text-sm font-bold"
+                  value={newAppointmentPassword}
+                  onChange={(e) => setNewAppointmentPassword(e.target.value)}
+                />
                 <button 
                   type="submit"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                  className="w-12 h-12 bg-brand-dark text-brand-gold rounded-xl hover:scale-105 active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-brand-dark/20 shrink-0"
                 >
-                  <Plus size={18} />
+                  <Plus size={24} strokeWidth={3} />
                 </button>
               </div>
             </form>
 
-            <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
+            <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
               <AnimatePresence mode="popLayout">
                 {appointments.map((app) => (
                   <motion.div
@@ -330,22 +427,27 @@ export default function App() {
                     exit={{ opacity: 0, scale: 0.95 }}
                     onClick={() => fetchAppointmentDetails(app.id)}
                     className={cn(
-                      "group flex items-center justify-between p-4 rounded-xl cursor-pointer transition-all border",
+                      "group flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all border",
                       selectedAppointment?.id === app.id 
-                        ? "bg-emerald-50 border-emerald-200" 
-                        : "bg-white border-transparent hover:bg-[#F5F5F0]"
+                        ? "bg-brand-dark text-white border-brand-dark shadow-lg shadow-brand-dark/20" 
+                        : "bg-white border-brand-dark/5 hover:border-brand-gold/50 hover:bg-brand-paper"
                     )}
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-4">
                       <div className={cn(
-                        "w-10 h-10 rounded-full flex items-center justify-center",
-                        selectedAppointment?.id === app.id ? "bg-emerald-600 text-white" : "bg-[#F5F5F0] text-gray-500"
+                        "w-12 h-12 rounded-xl flex items-center justify-center transition-colors",
+                        selectedAppointment?.id === app.id ? "bg-brand-gold text-brand-dark" : "bg-brand-paper text-brand-dark/30"
                       )}>
-                        <CalendarIcon size={20} />
+                        <CalendarIcon size={22} strokeWidth={2.5} />
                       </div>
                       <div>
-                        <h3 className="font-semibold text-sm">{app.title}</h3>
-                        <p className="text-xs text-gray-400">{format(parseISO(app.created_at), 'dd/MM/yyyy')}</p>
+                        <h3 className="font-extrabold text-sm tracking-tight">{app.title}</h3>
+                        <p className={cn(
+                          "text-[10px] uppercase tracking-wider font-extrabold",
+                          selectedAppointment?.id === app.id ? "text-brand-gold" : "text-brand-dark/20"
+                        )}>
+                          {format(parseISO(app.created_at), 'dd MMM yyyy')}
+                        </p>
                       </div>
                     </div>
                     <button
@@ -353,7 +455,12 @@ export default function App() {
                         e.stopPropagation();
                         handleDeleteAppointment(app.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-2 text-gray-400 hover:text-red-500 transition-all"
+                      className={cn(
+                        "p-2 rounded-lg transition-all",
+                        selectedAppointment?.id === app.id 
+                          ? "text-white/20 hover:text-red-400 hover:bg-white/5" 
+                          : "text-brand-dark/10 hover:text-red-500 hover:bg-red-50"
+                      )}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -368,21 +475,32 @@ export default function App() {
             <motion.div 
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white rounded-2xl p-6 shadow-sm border border-black/5"
+              className="bg-white rounded-3xl p-6 shadow-xl shadow-brand-dark/5 border border-brand-dark/5"
             >
-              <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 mb-4 flex items-center gap-2">
-                <Check size={14} className="text-emerald-600" />
-                Ngày được đề xuất
-              </h3>
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-sm font-bold uppercase tracking-widest text-brand-dark/40">Đề xuất hàng đầu</h3>
+                <div className="w-8 h-8 rounded-full bg-brand-gold/10 flex items-center justify-center">
+                  <Beer size={14} className="text-brand-gold" />
+                </div>
+              </div>
               <div className="space-y-3">
                 {votedDates.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between p-3 bg-[#F5F5F0] rounded-xl">
-                    <div>
-                      <p className="text-sm font-bold">{format(parseISO(d.date), 'dd/MM/yyyy')}</p>
-                      <p className="text-[10px] text-gray-500 truncate max-w-[150px]">{d.voters}</p>
+                  <div 
+                    key={d.id} 
+                    onClick={() => handleSuggestedDateClick(d.date)}
+                    className="flex items-center justify-between p-4 bg-brand-paper rounded-2xl border border-brand-dark/5 group hover:border-brand-gold/30 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-white flex flex-col items-center justify-center border border-brand-dark/5 shadow-sm">
+                        <span className="text-[10px] font-bold text-brand-dark/30 uppercase">{format(parseISO(d.date), 'MMM')}</span>
+                        <span className="text-sm font-bold text-brand-dark leading-none">{format(parseISO(d.date), 'dd')}</span>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-brand-dark/40 truncate max-w-[120px]">{d.voters}</p>
+                      </div>
                     </div>
                     <div className={cn(
-                      "px-2 py-1 rounded-lg text-xs font-bold border",
+                      "px-3 py-1.5 rounded-xl text-xs font-bold border shadow-sm",
                       getVoteLevel(d.vote_count)
                     )}>
                       {d.vote_count} vote
@@ -402,49 +520,32 @@ export default function App() {
               animate={{ opacity: 1, x: 0 }}
               className="space-y-6"
             >
-              {/* Header & User Info */}
-              <div className="bg-white rounded-2xl p-6 shadow-sm border border-black/5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-2xl font-bold">{selectedAppointment.title}</h2>
-                  <p className="text-sm text-gray-500">Chọn ngày và nhập tên để vote</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="relative">
-                    <Users className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
-                    <input
-                      type="text"
-                      placeholder="Tên của bạn..."
-                      className="pl-10 pr-4 py-2 bg-[#F5F5F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                      value={userName}
-                      onChange={(e) => setUserName(e.target.value)}
-                    />
-                  </div>
-                </div>
-              </div>
-
               {/* Calendar Grid */}
-              <div className="bg-white rounded-2xl p-6 shadow-sm border border-black/5">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-lg font-bold">{format(currentMonth, 'MMMM yyyy')}</h3>
-                  <div className="flex gap-2">
+              <div className="bg-white rounded-[2rem] p-8 shadow-2xl shadow-brand-dark/5 border border-brand-dark/5">
+                <div className="flex items-center justify-between mb-10">
+                  <div>
+                    <h3 className="text-4xl font-serif italic text-brand-dark leading-none mb-1 font-bold">{format(currentMonth, 'MMMM')}</h3>
+                    <p className="text-sm font-extrabold uppercase tracking-[0.3em] text-brand-gold">{format(currentMonth, 'yyyy')}</p>
+                  </div>
+                  <div className="flex gap-3">
                     <button 
                       onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
-                      className="p-2 hover:bg-[#F5F5F0] rounded-lg transition-colors"
+                      className="w-12 h-12 flex items-center justify-center bg-brand-paper hover:bg-brand-dark hover:text-brand-gold rounded-2xl transition-all border border-brand-dark/5 shadow-sm"
                     >
-                      <ChevronLeft size={20} />
+                      <ChevronLeft size={24} strokeWidth={2.5} />
                     </button>
                     <button 
                       onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
-                      className="p-2 hover:bg-[#F5F5F0] rounded-lg transition-colors"
+                      className="w-12 h-12 flex items-center justify-center bg-brand-paper hover:bg-brand-dark hover:text-brand-gold rounded-2xl transition-all border border-brand-dark/5 shadow-sm"
                     >
-                      <ChevronRight size={20} />
+                      <ChevronRight size={24} strokeWidth={2.5} />
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-7 gap-px bg-gray-100 rounded-xl overflow-hidden border border-gray-100">
-                  {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map(day => (
-                    <div key={day} className="bg-white py-3 text-center text-xs font-bold text-gray-400 uppercase tracking-wider">
+                <div className="grid grid-cols-7 gap-4">
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
+                    <div key={day} className="py-2 text-center text-[11px] font-extrabold text-brand-dark uppercase tracking-[0.2em]">
                       {day}
                     </div>
                   ))}
@@ -455,57 +556,61 @@ export default function App() {
                     const isCurrentMonth = isSameMonth(day, currentMonth);
                     
                     return (
-                      <div
+                      <motion.div
                         key={i}
                         onClick={() => {
                           setSelectedDate(day);
                           if (!appDate) handleAddDate(day);
                         }}
+                        animate={highlightDate === dateStr ? {
+                          scale: [1, 1.05, 1],
+                          backgroundColor: ['#FFFBEB', '#F59E0B', '#FFFBEB'],
+                          transition: { duration: 0.5, repeat: 2 }
+                        } : {}}
                         className={cn(
-                          "relative h-24 md:h-32 bg-white p-2 cursor-pointer transition-all hover:z-10 group/cell",
-                          !isCurrentMonth && "bg-gray-50/50 opacity-40",
-                          isSelected && "ring-2 ring-emerald-500 ring-inset z-20"
+                          "relative aspect-square md:aspect-auto md:h-32 bg-brand-paper rounded-2xl p-3 cursor-pointer transition-all hover:scale-[1.02] hover:shadow-xl hover:shadow-brand-dark/5 group/cell border border-transparent",
+                          !isCurrentMonth && "opacity-20 grayscale",
+                          isSelected && "ring-2 ring-brand-gold ring-offset-4 ring-offset-white z-20 border-brand-gold/20 shadow-2xl shadow-brand-gold/10"
                         )}
                       >
                         <div className="flex justify-between items-start">
                           <span className={cn(
-                            "text-sm font-medium w-7 h-7 flex items-center justify-center rounded-full",
-                            isToday(day) && "bg-emerald-600 text-white",
-                            !isToday(day) && isCurrentMonth && "text-gray-900",
-                            !isCurrentMonth && "text-gray-400"
+                            "text-base font-extrabold w-9 h-9 flex items-center justify-center rounded-xl transition-colors",
+                            isToday(day) && "bg-brand-dark text-brand-gold shadow-lg shadow-brand-dark/20",
+                            !isToday(day) && isCurrentMonth && "text-brand-dark group-hover/cell:text-brand-dark",
                           )}>
                             {format(day, 'd')}
                           </span>
                           {appDate && (
                             <div className={cn(
-                              "text-[10px] px-1.5 py-0.5 rounded-full font-bold border",
-                              getVoteLevel(appDate.vote_count) || "bg-gray-100 text-gray-500 border-gray-200"
+                              "text-xs px-2.5 py-1 rounded-lg font-extrabold border shadow-sm",
+                              getVoteLevel(appDate.vote_count) || "bg-white text-brand-dark/40 border-brand-dark/5"
                             )}>
-                              {appDate.vote_count} vote
+                              {appDate.vote_count}
                             </div>
                           )}
                         </div>
 
                         {appDate && (
-                          <div className="mt-2 space-y-1 overflow-hidden">
+                          <div className="mt-3 space-y-2">
                             <div className="flex flex-wrap gap-1">
-                              {appDate.voters?.split(',').slice(0, 3).map((voter, idx) => (
-                                <span key={idx} className="text-[10px] bg-gray-100 px-1 rounded text-gray-600 truncate max-w-full">
+                              {appDate.voters?.split(',').slice(0, 2).map((voter, idx) => (
+                                <span key={idx} className="text-[9px] bg-white/50 px-1.5 py-0.5 rounded-md text-brand-dark/60 font-medium border border-brand-dark/5">
                                   {voter}
                                 </span>
                               ))}
-                              {(appDate.voters?.split(',').length || 0) > 3 && (
-                                <span className="text-[10px] text-gray-400">...</span>
+                              {(appDate.voters?.split(',').length || 0) > 2 && (
+                                <span className="text-[9px] text-brand-dark/20 font-bold">+{appDate.voters!.split(',').length - 2}</span>
                               )}
                             </div>
                             
-                            <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 group-hover/cell:opacity-100 transition-opacity">
+                            <div className="absolute bottom-3 right-3 flex gap-1.5 opacity-0 group-hover/cell:opacity-100 transition-all translate-y-2 group-hover/cell:translate-y-0">
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleRemoveDate(appDate.id);
                                 }}
-                                className="p-1.5 bg-gray-100 text-gray-400 rounded-lg hover:bg-red-50 hover:text-red-500 transition-colors"
+                                className="w-8 h-8 bg-white text-brand-dark/20 rounded-lg hover:text-red-500 hover:bg-red-50 transition-all border border-brand-dark/5 shadow-sm flex items-center justify-center"
                                 title="Bỏ chọn ngày"
                               >
                                 <Trash2 size={14} />
@@ -516,7 +621,7 @@ export default function App() {
                                     e.stopPropagation();
                                     handleUnvote(appDate.id);
                                   }}
-                                  className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
+                                  className="w-8 h-8 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-all border border-red-100 shadow-sm flex items-center justify-center"
                                   title="Huỷ vote"
                                 >
                                   <X size={14} />
@@ -527,33 +632,33 @@ export default function App() {
                                     e.stopPropagation();
                                     handleVote(appDate.id);
                                   }}
-                                  className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-colors"
+                                  className="w-8 h-8 bg-brand-gold text-brand-dark rounded-lg hover:scale-110 active:scale-95 transition-all shadow-lg shadow-brand-gold/20 flex items-center justify-center"
                                   title="Vote"
                                 >
-                                  <Check size={14} />
+                                  <Check size={14} strokeWidth={3} />
                                 </button>
                               )}
                             </div>
                           </div>
                         )}
-                      </div>
+                      </motion.div>
                     );
                   })}
                 </div>
                 
                 {/* Legend */}
-                <div className="mt-6 flex items-center gap-4 text-xs text-gray-500">
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-3 h-3 rounded bg-emerald-100 border border-emerald-200"></div>
-                    <span>Thấp (≤33% max)</span>
+                <div className="mt-10 flex items-center gap-6 text-[11px] font-extrabold uppercase tracking-widest text-brand-dark/30">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 rounded-md bg-emerald-100 border border-emerald-200"></div>
+                    <span>Thấp</span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-3 h-3 rounded bg-emerald-300 border border-emerald-400"></div>
-                    <span>Trung bình (≤66% max)</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 rounded-md bg-emerald-300 border border-emerald-400"></div>
+                    <span>Vừa</span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-3 h-3 rounded bg-emerald-500 border border-emerald-600"></div>
-                    <span>Cao (&gt;66% max)</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 rounded-md bg-emerald-500 border border-emerald-600"></div>
+                    <span>Cao</span>
                   </div>
                 </div>
               </div>
@@ -563,59 +668,154 @@ export default function App() {
                 <motion.div 
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="bg-white rounded-2xl p-6 shadow-sm border border-black/5"
+                  className="bg-white rounded-3xl p-8 shadow-2xl shadow-brand-dark/5 border border-brand-dark/5"
                 >
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold">Chi tiết ngày {format(selectedDate, 'dd/MM/yyyy')}</h3>
-                    <button onClick={() => setSelectedDate(null)} className="text-gray-400 hover:text-gray-600">
+                  <div className="flex items-center justify-between mb-8">
+                    <div>
+                      <h3 className="text-xl font-bold tracking-tight">Chi tiết ngày {format(selectedDate, 'dd/MM/yyyy')}</h3>
+                      <p className="text-xs text-brand-dark/30 font-bold uppercase tracking-widest mt-1">Danh sách bình chọn</p>
+                    </div>
+                    <button onClick={() => setSelectedDate(null)} className="w-10 h-10 flex items-center justify-center bg-brand-paper rounded-full text-brand-dark/20 hover:text-brand-dark transition-colors">
                       <X size={20} />
                     </button>
                   </div>
                   
                   {selectedAppointment.dates?.find(d => d.date === format(selectedDate, 'yyyy-MM-dd')) ? (
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <Users size={16} />
-                        <span>Danh sách người đã vote:</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
+                    <div className="space-y-6">
+                      <div className="flex flex-wrap gap-3">
                         {selectedAppointment.dates?.find(d => d.date === format(selectedDate, 'yyyy-MM-dd'))?.voters?.split(',').map((voter, i) => (
-                          <span key={i} className="px-3 py-1 bg-[#F5F5F0] rounded-full text-sm font-medium">
+                          <motion.span 
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ delay: i * 0.05 }}
+                            key={i} 
+                            className="px-5 py-2.5 bg-brand-paper rounded-2xl text-sm font-bold border border-brand-dark/5 shadow-sm flex items-center gap-2"
+                          >
+                            <div className="w-2 h-2 rounded-full bg-brand-gold"></div>
                             {voter}
-                          </span>
-                        )) || <p className="text-sm text-gray-400 italic">Chưa có ai vote ngày này.</p>}
+                          </motion.span>
+                        )) || <p className="text-sm text-brand-dark/30 italic">Chưa có ai vote ngày này.</p>}
                       </div>
                     </div>
                   ) : (
-                    <p className="text-sm text-gray-500">Nhấn vào ngày để thêm vào danh sách bình chọn.</p>
+                    <div className="py-8 text-center bg-brand-paper rounded-2xl border border-dashed border-brand-dark/10">
+                      <p className="text-sm text-brand-dark/40 font-medium">Nhấn vào ngày để thêm vào danh sách bình chọn.</p>
+                    </div>
                   )}
                 </motion.div>
               )}
             </motion.div>
           ) : (
-            <div className="h-full min-h-[400px] flex flex-col items-center justify-center bg-white rounded-2xl border border-dashed border-gray-300 text-gray-400">
-              <CalendarIcon size={48} className="mb-4 opacity-20" />
-              <p>Chọn một buổi hẹn ở danh sách bên trái để bắt đầu vote</p>
+            <div className="h-full min-h-[600px] flex flex-col items-center justify-center bg-white rounded-[2rem] border border-dashed border-brand-dark/10 text-brand-dark/20">
+              <div className="w-24 h-24 bg-brand-paper rounded-full flex items-center justify-center mb-6">
+                <CalendarIcon size={40} strokeWidth={1} />
+              </div>
+              <p className="font-bold uppercase tracking-widest text-xs">Chọn một buổi hẹn để bắt đầu</p>
             </div>
           )}
         </div>
-      </div>
+      </main>
 
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #e5e7eb;
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #d1d5db;
-        }
-      `}</style>
+      {/* Modals */}
+      <AnimatePresence>
+        {isCreateModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsCreateModalOpen(false)}
+              className="absolute inset-0 bg-brand-dark/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative bg-white rounded-[2rem] p-8 w-full max-w-md shadow-2xl border border-brand-dark/5"
+            >
+              <h2 className="text-2xl font-serif italic mb-2 text-brand-dark">Xác nhận tạo buổi hẹn</h2>
+              <p className="text-sm text-brand-dark/60 mb-6 font-bold">Bạn đang tạo: <span className="text-brand-gold">{newAppointmentTitle}</span></p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest font-extrabold text-brand-dark/30 mb-2">Mật khẩu bảo vệ (tuỳ chọn)</label>
+                  <input
+                    type="password"
+                    placeholder="Nhập mật khẩu..."
+                    className="w-full px-5 py-4 bg-brand-paper rounded-2xl border border-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold transition-all font-bold"
+                    value={newAppointmentPassword}
+                    onChange={(e) => setNewAppointmentPassword(e.target.value)}
+                  />
+                </div>
+                
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    onClick={() => setIsCreateModalOpen(false)}
+                    className="flex-1 py-4 bg-brand-paper text-brand-dark/40 rounded-2xl font-extrabold hover:bg-brand-dark/5 transition-all"
+                  >
+                    Huỷ bỏ
+                  </button>
+                  <button 
+                    onClick={confirmCreate}
+                    className="flex-1 py-4 bg-brand-gold text-brand-dark rounded-2xl font-extrabold shadow-lg shadow-brand-gold/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    Tạo ngay
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isDeleteModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsDeleteModalOpen(false)}
+              className="absolute inset-0 bg-brand-dark/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative bg-white rounded-[2rem] p-8 w-full max-w-md shadow-2xl border border-brand-dark/5"
+            >
+              <h2 className="text-2xl font-serif italic mb-2 text-brand-dark">Xác nhận xoá</h2>
+              <p className="text-sm text-brand-dark/60 mb-6 font-bold">Vui lòng nhập mật khẩu để xoá buổi hẹn này.</p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-widest font-extrabold text-brand-dark/30 mb-2">Mật khẩu xác nhận</label>
+                  <input
+                    type="password"
+                    placeholder="Nhập mật khẩu..."
+                    className="w-full px-5 py-4 bg-brand-paper rounded-2xl border border-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold transition-all font-bold"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                  />
+                </div>
+                
+                <div className="flex gap-3 pt-4">
+                  <button 
+                    onClick={() => setIsDeleteModalOpen(false)}
+                    className="flex-1 py-4 bg-brand-paper text-brand-dark/40 rounded-2xl font-extrabold hover:bg-brand-dark/5 transition-all"
+                  >
+                    Không
+                  </button>
+                  <button 
+                    onClick={confirmDelete}
+                    className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-extrabold shadow-lg shadow-red-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    Có, xoá đi
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
