@@ -37,14 +37,35 @@ db.exec(`
     FOREIGN KEY (date_id) REFERENCES appointment_dates(id) ON DELETE CASCADE,
     UNIQUE(date_id, user_name)
   );
+
+  CREATE TABLE IF NOT EXISTS venues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    appointment_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    link TEXT,
+    FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS venue_votes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    venue_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL,
+    FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+    UNIQUE(venue_id, user_name)
+  );
 `);
 
 // Migration: Add password column if it doesn't exist
 try {
   db.exec("ALTER TABLE appointments ADD COLUMN password TEXT;");
-} catch (e) {
-  // Column already exists or other error we can ignore if it's just "duplicate column"
-}
+} catch (e) {}
+
+// Migration: Add finalization columns to appointments
+try {
+  db.exec("ALTER TABLE appointments ADD COLUMN is_finalized INTEGER DEFAULT 0;");
+  db.exec("ALTER TABLE appointments ADD COLUMN final_date_id INTEGER;");
+  db.exec("ALTER TABLE appointments ADD COLUMN final_venue_id INTEGER;");
+} catch (e) {}
 
 app.use(express.json());
 
@@ -60,7 +81,7 @@ function broadcast(data: any) {
 
 // API Routes
 app.get("/api/appointments", (req, res) => {
-  const appointments = db.prepare("SELECT id, title, created_at FROM appointments ORDER BY created_at DESC").all();
+  const appointments = db.prepare("SELECT id, title, created_at, is_finalized FROM appointments ORDER BY created_at DESC").all();
   res.json(appointments);
 });
 
@@ -125,7 +146,7 @@ app.delete("/api/appointments/:id", (req, res) => {
 
 app.get("/api/appointments/:id", (req, res) => {
   const numericId = parseInt(req.params.id);
-  const appointment = db.prepare("SELECT id, title, created_at FROM appointments WHERE id = ?").get(numericId);
+  const appointment = db.prepare("SELECT id, title, created_at, is_finalized, final_date_id, final_venue_id FROM appointments WHERE id = ?").get(numericId);
   if (!appointment) return res.status(404).json({ error: "Appointment not found" });
 
   const dates = db.prepare(`
@@ -136,7 +157,66 @@ app.get("/api/appointments/:id", (req, res) => {
     WHERE ad.appointment_id = ?
   `).all(numericId);
 
-  res.json({ ...appointment, dates });
+  const venues = db.prepare(`
+    SELECT v.*,
+    (SELECT COUNT(*) FROM venue_votes vv WHERE vv.venue_id = v.id) as vote_count,
+    (SELECT GROUP_CONCAT(user_name) FROM venue_votes vv WHERE vv.venue_id = v.id) as voters
+    FROM venues v
+    WHERE v.appointment_id = ?
+  `).all(numericId);
+
+  res.json({ ...appointment, dates, venues });
+});
+
+app.post("/api/appointments/:id/venues", (req, res) => {
+  const { name, link } = req.body;
+  const appointmentId = parseInt(req.params.id);
+  
+  const info = db.prepare("INSERT INTO venues (appointment_id, name, link) VALUES (?, ?, ?)").run(appointmentId, name, link || null);
+  const newVenue = { id: info.lastInsertRowid, appointment_id: appointmentId, name, link, vote_count: 0, voters: null };
+  broadcast({ type: "VENUE_ADDED", payload: { appointmentId, venue: newVenue } });
+  res.json(newVenue);
+});
+
+app.delete("/api/appointments/:id/venues/:venueId", (req, res) => {
+  const appointmentId = parseInt(req.params.id);
+  const venueId = parseInt(req.params.venueId);
+  
+  db.prepare("DELETE FROM venues WHERE id = ? AND appointment_id = ?").run(venueId, appointmentId);
+  broadcast({ type: "VENUE_REMOVED", payload: { appointmentId } });
+  res.json({ success: true });
+});
+
+app.post("/api/venue_votes", (req, res) => {
+  const { venueId, userName, appointmentId } = req.body;
+  try {
+    db.prepare("INSERT INTO venue_votes (venue_id, user_name) VALUES (?, ?)").run(venueId, userName);
+    broadcast({ type: "VENUE_VOTE_UPDATED", payload: { appointmentId: parseInt(appointmentId) } });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ error: "Already voted" });
+  }
+});
+
+app.delete("/api/venue_votes", (req, res) => {
+  const { venueId, userName, appointmentId } = req.body;
+  db.prepare("DELETE FROM venue_votes WHERE venue_id = ? AND user_name = ?").run(venueId, userName);
+  broadcast({ type: "VENUE_VOTE_UPDATED", payload: { appointmentId: parseInt(appointmentId) } });
+  res.json({ success: true });
+});
+
+app.post("/api/appointments/:id/finalize", (req, res) => {
+  const { dateId, venueId } = req.body;
+  const appointmentId = parseInt(req.params.id);
+
+  const appointment = db.prepare("SELECT id FROM appointments WHERE id = ?").get(appointmentId);
+  if (!appointment) return res.status(404).json({ error: "Not found" });
+  
+  db.prepare("UPDATE appointments SET is_finalized = 1, final_date_id = ?, final_venue_id = ? WHERE id = ?")
+    .run(dateId, venueId, appointmentId);
+  
+  broadcast({ type: "APPOINTMENT_FINALIZED", payload: { id: appointmentId } });
+  res.json({ success: true });
 });
 
 app.post("/api/appointments/:id/dates", (req, res) => {

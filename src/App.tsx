@@ -53,11 +53,24 @@ interface AppointmentDate {
   voters: string | null;
 }
 
+interface Venue {
+  id: number;
+  appointment_id: number;
+  name: string;
+  link: string | null;
+  vote_count: number;
+  voters: string | null;
+}
+
 interface Appointment {
   id: number;
   title: string;
   created_at: string;
+  is_finalized: number;
+  final_date_id: number | null;
+  final_venue_id: number | null;
   dates?: AppointmentDate[];
+  venues?: Venue[];
 }
 
 export default function App() {
@@ -69,12 +82,22 @@ export default function App() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   
+  // Venue states
+  const [newVenueName, setNewVenueName] = useState('');
+  const [newVenueLink, setNewVenueLink] = useState('');
+  
+  // Finalization states
+  const [isFinalizeModalOpen, setIsFinalizeModalOpen] = useState(false);
+  const [finalDateId, setFinalDateId] = useState<number | null>(null);
+  const [finalVenueId, setFinalVenueId] = useState<number | null>(null);
+
   // Modal states
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [appointmentToDelete, setAppointmentToDelete] = useState<number | null>(null);
   const [highlightDate, setHighlightDate] = useState<string | null>(null);
+  const [expandedVenueId, setExpandedVenueId] = useState<number | null>(null);
 
   // Fetch appointments list
   const fetchAppointments = async () => {
@@ -127,7 +150,9 @@ export default function App() {
     ws.onmessage = (event) => {
       const { type, payload } = JSON.parse(event.data);
       if (
-        (type === 'DATE_ADDED' || type === 'VOTE_UPDATED' || type === 'DATE_REMOVED') && 
+        (type === 'DATE_ADDED' || type === 'VOTE_UPDATED' || type === 'DATE_REMOVED' || 
+         type === 'VENUE_ADDED' || type === 'VENUE_REMOVED' || type === 'VENUE_VOTE_UPDATED' ||
+         type === 'APPOINTMENT_FINALIZED') && 
         payload.appointmentId === selectedAppointment.id
       ) {
         fetchAppointmentDetails(selectedAppointment.id);
@@ -204,6 +229,67 @@ export default function App() {
     setSelectedDate(date);
     setHighlightDate(dateStr);
     setTimeout(() => setHighlightDate(null), 2000);
+  };
+
+  const handleAddVenue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAppointment || !newVenueName.trim()) return;
+    const res = await fetch(`/api/appointments/${selectedAppointment.id}/venues`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newVenueName, link: newVenueLink }),
+    });
+    if (res.ok) {
+      setNewVenueName('');
+      setNewVenueLink('');
+    }
+  };
+
+  const handleRemoveVenue = async (venueId: number) => {
+    if (!selectedAppointment) return;
+    await fetch(`/api/appointments/${selectedAppointment.id}/venues/${venueId}`, {
+      method: 'DELETE'
+    });
+  };
+
+  const handleVoteVenue = async (venueId: number) => {
+    if (!userName.trim() || !selectedAppointment) {
+      alert('Vui lòng nhập tên của bạn!');
+      return;
+    }
+    localStorage.setItem('voter_name', userName);
+    await fetch('/api/venue_votes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ venueId, userName, appointmentId: selectedAppointment.id }),
+    });
+  };
+
+  const handleUnvoteVenue = async (venueId: number) => {
+    if (!userName.trim() || !selectedAppointment) return;
+    await fetch('/api/venue_votes', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ venueId, userName, appointmentId: selectedAppointment.id }),
+    });
+  };
+
+  const handleFinalize = async () => {
+    if (!selectedAppointment || !finalDateId || !finalVenueId) {
+      alert('Vui lòng chọn ngày và quán!');
+      return;
+    }
+    const res = await fetch(`/api/appointments/${selectedAppointment.id}/finalize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dateId: finalDateId, venueId: finalVenueId }),
+    });
+    if (res.ok) {
+      setIsFinalizeModalOpen(false);
+    } else {
+      const error = await res.json();
+      alert(error.error || 'Lỗi chốt lịch');
+    }
   };
 
   const handleAddDate = async (date: Date) => {
@@ -438,10 +524,15 @@ export default function App() {
                         "w-12 h-12 rounded-xl flex items-center justify-center transition-colors",
                         selectedAppointment?.id === app.id ? "bg-brand-gold text-brand-dark" : "bg-brand-paper text-brand-dark/30"
                       )}>
-                        <CalendarIcon size={22} strokeWidth={2.5} />
+                        {app.is_finalized ? <Check size={22} strokeWidth={2.5} /> : <CalendarIcon size={22} strokeWidth={2.5} />}
                       </div>
                       <div>
-                        <h3 className="font-extrabold text-sm tracking-tight">{app.title}</h3>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-extrabold text-sm tracking-tight">{app.title}</h3>
+                          {app.is_finalized === 1 && (
+                            <span className="text-[8px] bg-emerald-500 text-white px-1.5 py-0.5 rounded-full font-black uppercase tracking-tighter">Chốt</span>
+                          )}
+                        </div>
                         <p className={cn(
                           "text-[10px] uppercase tracking-wider font-extrabold",
                           selectedAppointment?.id === app.id ? "text-brand-gold" : "text-brand-dark/20"
@@ -470,8 +561,159 @@ export default function App() {
             </div>
           </div>
 
+          {/* Venue Suggestions List */}
+          {selectedAppointment && selectedAppointment.is_finalized === 0 && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-3xl p-6 shadow-xl shadow-brand-dark/5 border border-brand-dark/5"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-sm font-bold uppercase tracking-widest text-brand-dark/40">Quán đề xuất</h3>
+                <div className="w-8 h-8 rounded-full bg-brand-gold/10 flex items-center justify-center">
+                  <Plus size={14} className="text-brand-gold" />
+                </div>
+              </div>
+
+              <form onSubmit={handleAddVenue} className="mb-6 space-y-2">
+                <input
+                  type="text"
+                  placeholder="Tên quán..."
+                  className="w-full px-4 py-2.5 bg-brand-paper rounded-xl border border-brand-dark/5 focus:outline-none focus:border-brand-gold text-sm font-bold"
+                  value={newVenueName}
+                  onChange={(e) => setNewVenueName(e.target.value)}
+                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Link quán (tuỳ chọn)..."
+                    className="flex-1 px-4 py-2.5 bg-brand-paper rounded-xl border border-brand-dark/5 focus:outline-none focus:border-brand-gold text-sm font-bold"
+                    value={newVenueLink}
+                    onChange={(e) => setNewVenueLink(e.target.value)}
+                  />
+                  <button type="submit" className="px-4 bg-brand-dark text-brand-gold rounded-xl font-bold text-sm">Thêm</button>
+                </div>
+              </form>
+
+              <div className="space-y-3">
+                {selectedAppointment.venues?.map((v) => (
+                  <div 
+                    key={v.id} 
+                    className="bg-brand-paper rounded-2xl border border-brand-dark/5 group/venue overflow-hidden"
+                  >
+                    <div 
+                      onClick={() => setExpandedVenueId(expandedVenueId === v.id ? null : v.id)}
+                      className="p-4 cursor-pointer hover:bg-brand-dark/[0.02] transition-colors"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <h4 className="text-sm font-extrabold text-brand-dark">{v.name}</h4>
+                          {v.link && (
+                            <a 
+                              href={v.link} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-[10px] text-brand-gold underline font-bold truncate max-w-[150px] block"
+                            >
+                              Xem link quán
+                            </a>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs font-black text-brand-dark/40 bg-white px-2 py-1 rounded-lg border border-brand-dark/5">
+                            {v.vote_count}
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveVenue(v.id);
+                            }} 
+                            className="text-brand-dark/10 hover:text-red-500 opacity-0 group-hover/venue:opacity-100 transition-opacity"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1">
+                          <Users size={10} className="text-brand-dark/20" />
+                          <p className="text-[9px] text-brand-dark/30 font-bold">
+                            {v.vote_count > 0 ? `${v.vote_count} người đã vote` : 'Chưa có vote'}
+                          </p>
+                        </div>
+                        {v.voters?.split(',').includes(userName) ? (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleUnvoteVenue(v.id);
+                            }} 
+                            className="text-[10px] font-black text-red-500 uppercase"
+                          >
+                            Bỏ vote
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleVoteVenue(v.id);
+                            }} 
+                            className="text-[10px] font-black text-brand-gold uppercase"
+                          >
+                            Vote
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <AnimatePresence>
+                      {expandedVenueId === v.id && v.voters && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="px-4 pb-4 border-t border-brand-dark/5 bg-brand-dark/[0.01]"
+                        >
+                          <div className="pt-3 flex flex-wrap gap-1.5">
+                            {v.voters.split(',').map((voter, idx) => (
+                              <span 
+                                key={idx} 
+                                className="text-[9px] bg-white px-2 py-1 rounded-md text-brand-dark/60 font-bold border border-brand-dark/5 shadow-sm"
+                              >
+                                {voter}
+                              </span>
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Finalize Action Card */}
+          {selectedAppointment && selectedAppointment.is_finalized === 0 && 
+           selectedAppointment.dates && selectedAppointment.dates.length > 0 && 
+           selectedAppointment.venues && selectedAppointment.venues.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-emerald-500 rounded-3xl p-1 shadow-xl shadow-emerald-500/20"
+            >
+              <button 
+                onClick={() => setIsFinalizeModalOpen(true)}
+                className="w-full py-4 bg-emerald-500 text-white rounded-[1.4rem] font-black uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center justify-center gap-3"
+              >
+                <Check size={20} strokeWidth={3} />
+                Chốt lịch nhậu
+              </button>
+            </motion.div>
+          )}
+
           {/* Voted Dates List */}
-          {selectedAppointment && votedDates.length > 0 && (
+          {selectedAppointment && selectedAppointment.is_finalized === 0 && votedDates.length > 0 && (
             <motion.div 
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -515,11 +757,75 @@ export default function App() {
         {/* Main Content: Calendar & Voting */}
         <div className="lg:col-span-8">
           {selectedAppointment ? (
-            <motion.div 
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="space-y-6"
-            >
+            selectedAppointment.is_finalized === 1 ? (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-white rounded-[2rem] p-12 shadow-2xl border-4 border-emerald-500/20 text-center relative overflow-hidden"
+              >
+                <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500"></div>
+                <div className="mb-10">
+                  <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
+                    <Check size={48} strokeWidth={3} />
+                  </div>
+                  <h2 className="text-5xl font-serif italic text-brand-dark mb-2">Kèo đã chốt!</h2>
+                  <p className="text-sm font-black uppercase tracking-[0.4em] text-emerald-600">Chuẩn bị lên đồ</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
+                  <div className="bg-brand-paper p-8 rounded-[2rem] border border-brand-dark/5">
+                    <p className="text-[10px] uppercase tracking-widest font-black text-brand-dark/30 mb-4">Thời gian</p>
+                    <div className="flex flex-col items-center">
+                      <span className="text-6xl font-serif italic text-brand-dark leading-none mb-2">
+                        {selectedAppointment.dates?.find(d => d.id === selectedAppointment.final_date_id) 
+                          ? format(parseISO(selectedAppointment.dates.find(d => d.id === selectedAppointment.final_date_id)!.date), 'dd')
+                          : '??'}
+                      </span>
+                      <span className="text-sm font-black uppercase text-brand-gold">
+                        {selectedAppointment.dates?.find(d => d.id === selectedAppointment.final_date_id) 
+                          ? format(parseISO(selectedAppointment.dates.find(d => d.id === selectedAppointment.final_date_id)!.date), 'MMMM yyyy')
+                          : '??'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-brand-paper p-8 rounded-[2rem] border border-brand-dark/5">
+                    <p className="text-[10px] uppercase tracking-widest font-black text-brand-dark/30 mb-4">Địa điểm</p>
+                    <div className="flex flex-col items-center">
+                      <span className="text-2xl font-extrabold text-brand-dark mb-2 text-center">
+                        {selectedAppointment.venues?.find(v => v.id === selectedAppointment.final_venue_id)?.name || 'Chưa xác định'}
+                      </span>
+                      {selectedAppointment.venues?.find(v => v.id === selectedAppointment.final_venue_id)?.link && (
+                        <a 
+                          href={selectedAppointment.venues.find(v => v.id === selectedAppointment.final_venue_id)!.link!} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="px-4 py-2 bg-brand-dark text-brand-gold rounded-xl text-xs font-black uppercase tracking-widest hover:scale-105 transition-transform"
+                        >
+                          Xem bản đồ
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-brand-dark/5 pt-10">
+                  <p className="text-[10px] uppercase tracking-widest font-black text-brand-dark/30 mb-6">Anh em tham chiến</p>
+                  <div className="flex flex-wrap justify-center gap-3">
+                    {selectedAppointment.dates?.find(d => d.id === selectedAppointment.final_date_id)?.voters?.split(',').map((voter, i) => (
+                      <span key={i} className="px-6 py-3 bg-brand-dark text-brand-gold rounded-2xl text-sm font-black shadow-lg shadow-brand-dark/10">
+                        {voter}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div 
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="space-y-6"
+              >
               {/* Calendar Grid */}
               <div className="bg-white rounded-[2rem] p-8 shadow-2xl shadow-brand-dark/5 border border-brand-dark/5">
                 <div className="flex items-center justify-between mb-10">
@@ -705,8 +1011,9 @@ export default function App() {
                 </motion.div>
               )}
             </motion.div>
-          ) : (
-            <div className="h-full min-h-[600px] flex flex-col items-center justify-center bg-white rounded-[2rem] border border-dashed border-brand-dark/10 text-brand-dark/20">
+          )
+        ) : (
+          <div className="h-full min-h-[600px] flex flex-col items-center justify-center bg-white rounded-[2rem] border border-dashed border-brand-dark/10 text-brand-dark/20">
               <div className="w-24 h-24 bg-brand-paper rounded-full flex items-center justify-center mb-6">
                 <CalendarIcon size={40} strokeWidth={1} />
               </div>
@@ -809,6 +1116,73 @@ export default function App() {
                     className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-extrabold shadow-lg shadow-red-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
                   >
                     Có, xoá đi
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isFinalizeModalOpen && selectedAppointment && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsFinalizeModalOpen(false)}
+              className="absolute inset-0 bg-brand-dark/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative bg-white rounded-[2rem] p-8 w-full max-w-lg shadow-2xl border border-brand-dark/5"
+            >
+              <h2 className="text-2xl font-serif italic mb-2 text-brand-dark">Chốt kèo nhậu</h2>
+              <p className="text-sm text-brand-dark/60 mb-6 font-bold">Chọn ngày và quán cuối cùng để chốt lịch.</p>
+              
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest font-extrabold text-brand-dark/30 mb-2">Chọn ngày</label>
+                    <select 
+                      className="w-full px-4 py-3 bg-brand-paper rounded-xl border border-brand-dark/5 font-bold text-sm focus:outline-none focus:border-brand-gold"
+                      value={finalDateId || ''}
+                      onChange={(e) => setFinalDateId(Number(e.target.value))}
+                    >
+                      <option value="">-- Chọn ngày --</option>
+                      {selectedAppointment.dates?.filter(d => d.vote_count > 0).sort((a,b) => b.vote_count - a.vote_count).map(d => (
+                        <option key={d.id} value={d.id}>{format(parseISO(d.date), 'dd/MM/yyyy')} ({d.vote_count} vote)</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest font-extrabold text-brand-dark/30 mb-2">Chọn quán</label>
+                    <select 
+                      className="w-full px-4 py-3 bg-brand-paper rounded-xl border border-brand-dark/5 font-bold text-sm focus:outline-none focus:border-brand-gold"
+                      value={finalVenueId || ''}
+                      onChange={(e) => setFinalVenueId(Number(e.target.value))}
+                    >
+                      <option value="">-- Chọn quán --</option>
+                      {selectedAppointment.venues?.sort((a,b) => b.vote_count - a.vote_count).map(v => (
+                        <option key={v.id} value={v.id}>{v.name} ({v.vote_count} vote)</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    onClick={() => setIsFinalizeModalOpen(false)}
+                    className="flex-1 py-4 bg-brand-paper text-brand-dark/40 rounded-2xl font-extrabold hover:bg-brand-dark/5 transition-all"
+                  >
+                    Huỷ bỏ
+                  </button>
+                  <button 
+                    onClick={handleFinalize}
+                    className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-extrabold shadow-lg shadow-emerald-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    Chốt kèo
                   </button>
                 </div>
               </div>
