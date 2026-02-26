@@ -99,12 +99,31 @@ export default function App() {
   const [appointmentToDelete, setAppointmentToDelete] = useState<number | null>(null);
   const [highlightDate, setHighlightDate] = useState<string | null>(null);
   const [expandedVenueId, setExpandedVenueId] = useState<number | null>(null);
+  const [voteStatus, setVoteStatus] = useState<'free' | 'busy'>('free');
+
+  const parseVoters = (votersStr: string | null | undefined) => {
+    if (!votersStr) return [];
+    return votersStr.split(',').map(v => {
+      const parts = v.split(':');
+      return { name: parts[0], status: parts[1] || 'free' };
+    });
+  };
 
   // Fetch appointments list
   const fetchAppointments = async () => {
-    const res = await fetch('/api/appointments');
-    const data = await res.json();
-    setAppointments(data);
+    try {
+      const res = await fetch('/api/appointments');
+      const data = await res.json();
+      if (res.ok && Array.isArray(data)) {
+        setAppointments(data);
+      } else {
+        console.error('Error fetching appointments:', data.error || 'Invalid data format');
+        setAppointments([]);
+      }
+    } catch (error) {
+      console.error('Network error fetching appointments:', error);
+      setAppointments([]);
+    }
   };
 
   // Fetch specific appointment details
@@ -336,7 +355,7 @@ export default function App() {
     }
   };
 
-  const handleVote = async (dateId: number) => {
+  const handleVote = async (dateId: number, status: 'free' | 'busy' = 'free') => {
     if (!userName.trim()) {
       alert('Vui lòng nhập tên của bạn!');
       return;
@@ -350,14 +369,29 @@ export default function App() {
         ...prev,
         dates: prev.dates?.map(d => {
           if (d.id === dateId) {
-            const currentVoters = d.voters ? d.voters.split(',') : [];
-            if (!currentVoters.includes(userName)) {
-              return {
-                ...d,
-                vote_count: d.vote_count + 1,
-                voters: [...currentVoters, userName].join(',')
-              };
+            const voters = parseVoters(d.voters);
+            const userVote = voters.find(v => v.name === userName);
+            
+            let newVoters;
+            let newVoteCount = d.vote_count;
+
+            if (userVote) {
+              if (userVote.status === status) return d;
+              // Update status
+              newVoters = voters.map(v => v.name === userName ? { ...v, status } : v);
+              // Adjust vote_count if status changed to/from free
+              if (userVote.status === 'free' && status === 'busy') newVoteCount--;
+              if (userVote.status === 'busy' && status === 'free') newVoteCount++;
+            } else {
+              newVoters = [...voters, { name: userName, status }];
+              if (status === 'free') newVoteCount++;
             }
+
+            return {
+              ...d,
+              vote_count: newVoteCount,
+              voters: newVoters.map(v => `${v.name}:${v.status}`).join(',')
+            };
           }
           return d;
         })
@@ -367,7 +401,7 @@ export default function App() {
     const res = await fetch('/api/votes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dateId, userName, appointmentId: selectedAppointment?.id }),
+      body: JSON.stringify({ dateId, userName, appointmentId: selectedAppointment?.id, status }),
     });
 
     if (!res.ok) {
@@ -383,12 +417,15 @@ export default function App() {
       if (!prev) return null;
       const updatedDates = prev.dates?.map(d => {
         if (d.id === dateId) {
-          const currentVoters = d.voters ? d.voters.split(',') : [];
-          if (currentVoters.includes(userName)) {
+          const voters = parseVoters(d.voters);
+          const userVote = voters.find(v => v.name === userName);
+          
+          if (userVote) {
+            const newVoters = voters.filter(v => v.name !== userName);
             return {
               ...d,
-              vote_count: Math.max(0, d.vote_count - 1),
-              voters: currentVoters.filter(v => v !== userName).join(',')
+              vote_count: userVote.status === 'free' ? Math.max(0, d.vote_count - 1) : d.vote_count,
+              voters: newVoters.map(v => `${v.name}:${v.status}`).join(',')
             };
           }
         }
@@ -397,7 +434,7 @@ export default function App() {
 
       return {
         ...prev,
-        dates: updatedDates?.filter(d => d.vote_count > 0)
+        dates: updatedDates
       };
     });
 
@@ -431,15 +468,19 @@ export default function App() {
       if (res.ok) {
         const newData = await res.json();
         if (newData && newData.id) {
-          handleVote(newData.id);
+          handleVote(newData.id, voteStatus);
         }
       }
     } else {
-      const hasVoted = appDate.voters?.split(',').includes(userName);
-      if (hasVoted) {
-        handleUnvote(appDate.id);
+      const voters = parseVoters(appDate.voters);
+      const userVote = voters.find(v => v.name === userName);
+      
+      if (!userVote) {
+        handleVote(appDate.id, voteStatus);
+      } else if (userVote.status !== voteStatus) {
+        handleVote(appDate.id, voteStatus);
       } else {
-        handleVote(appDate.id);
+        handleUnvote(appDate.id);
       }
     }
   };
@@ -476,24 +517,24 @@ export default function App() {
     <div className="min-h-screen bg-brand-paper text-brand-dark font-sans selection:bg-brand-gold/20">
       {/* Top Navigation / Logo Bar */}
       <header className="border-b border-brand-dark/5 bg-white/80 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-brand-dark rounded-xl flex items-center justify-center text-brand-gold shadow-lg shadow-brand-dark/10">
-              <Beer size={28} strokeWidth={1.5} />
+        <div className="max-w-7xl mx-auto px-4 py-4 md:h-20 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-4 w-full md:w-auto">
+            <div className="w-10 h-10 md:w-12 md:h-12 bg-brand-dark rounded-xl flex items-center justify-center text-brand-gold shadow-lg shadow-brand-dark/10 shrink-0">
+              <Beer size={24} className="md:w-7 md:h-7" strokeWidth={1.5} />
             </div>
             <div>
-              <h1 className="grit-logo text-3xl leading-none tracking-tight">Grit</h1>
-              <p className="text-[11px] uppercase tracking-[0.2em] font-extrabold text-brand-gold">Bia và Rượu</p>
+              <h1 className="grit-logo text-2xl md:text-3xl leading-none tracking-tight">Grit</h1>
+              <p className="text-[9px] md:text-[11px] uppercase tracking-[0.2em] font-extrabold text-brand-gold">Bia và Rượu</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="relative group">
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <div className="relative group w-full md:w-auto">
               <Users className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-dark/30 w-4 h-4 group-focus-within:text-brand-gold transition-colors" />
               <input
                 type="text"
                 placeholder="Tên của bạn..."
-                className="pl-10 pr-4 py-2.5 bg-brand-paper border border-brand-dark/5 rounded-full focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold text-sm transition-all w-40 md:w-64 font-bold"
+                className="pl-10 pr-4 py-2.5 bg-brand-paper border border-brand-dark/5 rounded-full focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold text-sm transition-all w-full md:w-64 font-bold"
                 value={userName}
                 onChange={(e) => setUserName(e.target.value)}
               />
@@ -519,12 +560,12 @@ export default function App() {
                 <input
                   type="text"
                   placeholder="Tên buổi hẹn mới..."
-                  className="w-full pl-5 pr-5 py-4 bg-brand-paper rounded-2xl border border-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold transition-all placeholder:text-brand-dark/20 font-bold"
+                  className="w-full pl-5 pr-5 py-3 md:py-4 bg-brand-paper rounded-2xl border border-brand-dark/5 focus:outline-none focus:ring-2 focus:ring-brand-gold/30 focus:border-brand-gold transition-all placeholder:text-brand-dark/20 font-bold text-sm md:text-base"
                   value={newAppointmentTitle}
                   onChange={(e) => setNewAppointmentTitle(e.target.value)}
                 />
               </div>
-              <div className="relative flex gap-2">
+              <div className="relative flex flex-col sm:flex-row gap-2">
                 <input
                   type="password"
                   placeholder="Mật khẩu xoá (tuỳ chọn)..."
@@ -534,14 +575,15 @@ export default function App() {
                 />
                 <button 
                   type="submit"
-                  className="w-12 h-12 bg-brand-dark text-brand-gold rounded-xl hover:scale-105 active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-brand-dark/20 shrink-0"
+                  className="w-full sm:w-12 h-12 bg-brand-dark text-brand-gold rounded-xl hover:scale-105 active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-brand-dark/20 shrink-0"
                 >
-                  <Plus size={24} strokeWidth={3} />
+                  <Plus size={24} strokeWidth={3} className="hidden sm:block" />
+                  <span className="sm:hidden font-bold">Tạo buổi hẹn</span>
                 </button>
               </div>
             </form>
 
-            <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
+            <div className="space-y-3 max-h-[30vh] md:max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
               <AnimatePresence mode="popLayout">
                 {appointments.map((app) => (
                   <motion.div
@@ -555,29 +597,38 @@ export default function App() {
                       "group flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all border",
                       selectedAppointment?.id === app.id 
                         ? "bg-brand-dark text-white border-brand-dark shadow-lg shadow-brand-dark/20" 
-                        : "bg-white border-brand-dark/5 hover:border-brand-gold/50 hover:bg-brand-paper"
+                        : app.is_finalized 
+                          ? "bg-emerald-50 border-emerald-100 hover:border-emerald-300" 
+                          : "bg-white border-brand-dark/5 hover:border-brand-gold/50 hover:bg-brand-paper"
                     )}
                   >
                     <div className="flex items-center gap-4">
                       <div className={cn(
                         "w-12 h-12 rounded-xl flex items-center justify-center transition-colors",
-                        selectedAppointment?.id === app.id ? "bg-brand-gold text-brand-dark" : "bg-brand-paper text-brand-dark/30"
+                        selectedAppointment?.id === app.id 
+                          ? "bg-brand-gold text-brand-dark" 
+                          : app.is_finalized 
+                            ? "bg-emerald-100 text-emerald-600" 
+                            : "bg-brand-paper text-brand-dark/30"
                       )}>
                         {app.is_finalized ? <Check size={22} strokeWidth={2.5} /> : <CalendarIcon size={22} strokeWidth={2.5} />}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
                           <h3 className="font-extrabold text-sm tracking-tight">{app.title}</h3>
-                          {app.is_finalized === 1 && (
-                            <span className="text-[8px] bg-emerald-500 text-white px-1.5 py-0.5 rounded-full font-black uppercase tracking-tighter">Chốt</span>
-                          )}
                         </div>
-                        <p className={cn(
-                          "text-[10px] uppercase tracking-wider font-extrabold",
-                          selectedAppointment?.id === app.id ? "text-brand-gold" : "text-brand-dark/20"
-                        )}>
-                          {format(parseISO(app.created_at), 'dd MMM yyyy')}
-                        </p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <p className={cn(
+                            "text-[10px] uppercase tracking-wider font-extrabold",
+                            selectedAppointment?.id === app.id 
+                              ? "text-brand-gold" 
+                              : app.is_finalized 
+                                ? "text-emerald-600" 
+                                : "text-brand-dark/20"
+                          )}>
+                            {app.is_finalized ? "Đã chốt lịch" : "Đang bình chọn"}
+                          </p>
+                        </div>
                       </div>
                     </div>
                     <button
@@ -622,7 +673,7 @@ export default function App() {
                   value={newVenueName}
                   onChange={(e) => setNewVenueName(e.target.value)}
                 />
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                   <input
                     type="text"
                     placeholder="Link quán (tuỳ chọn)..."
@@ -630,7 +681,7 @@ export default function App() {
                     value={newVenueLink}
                     onChange={(e) => setNewVenueLink(e.target.value)}
                   />
-                  <button type="submit" className="px-4 bg-brand-dark text-brand-gold rounded-xl font-bold text-sm">Thêm</button>
+                  <button type="submit" className="w-full sm:w-auto px-6 py-2.5 bg-brand-dark text-brand-gold rounded-xl font-bold text-sm shrink-0">Thêm</button>
                 </div>
               </form>
 
@@ -765,29 +816,41 @@ export default function App() {
                 </div>
               </div>
               <div className="space-y-3">
-                {votedDates.map((d) => (
-                  <div 
-                    key={d.id} 
-                    onClick={() => handleSuggestedDateClick(d.date)}
-                    className="flex items-center justify-between p-4 bg-brand-paper rounded-2xl border border-brand-dark/5 group hover:border-brand-gold/30 transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-white flex flex-col items-center justify-center border border-brand-dark/5 shadow-sm">
-                        <span className="text-[10px] font-bold text-brand-dark/30 uppercase">{format(parseISO(d.date), 'MMM')}</span>
-                        <span className="text-sm font-bold text-brand-dark leading-none">{format(parseISO(d.date), 'dd')}</span>
+                {votedDates.map((d) => {
+                  const voters = parseVoters(d.voters);
+                  const freeCount = voters.filter(v => v.status === 'free').length;
+                  const busyCount = voters.filter(v => v.status === 'busy').length;
+                  const totalCount = voters.length;
+
+                  return (
+                    <div 
+                      key={d.id} 
+                      onClick={() => handleSuggestedDateClick(d.date)}
+                      className="flex items-center justify-between p-4 bg-brand-paper rounded-2xl border border-brand-dark/5 group hover:border-brand-gold/30 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-white flex flex-col items-center justify-center border border-brand-dark/5 shadow-sm">
+                          <span className="text-[10px] font-bold text-brand-dark/30 uppercase">{format(parseISO(d.date), 'MMM')}</span>
+                          <span className="text-sm font-bold text-brand-dark leading-none">{format(parseISO(d.date), 'dd')}</span>
+                        </div>
+                        <div className="flex flex-col">
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              <span className="text-[10px] font-bold text-emerald-600">{freeCount} rảnh</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                              <span className="text-[10px] font-bold text-red-600">{busyCount} bận</span>
+                            </div>
+                          </div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-brand-dark/20 mt-1">Tổng cộng: {totalCount} vote</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-xs font-bold text-brand-dark/40 truncate max-w-[120px]">{d.voters}</p>
-                      </div>
+                      <ChevronRight size={16} className="text-brand-dark/10 group-hover:text-brand-gold transition-colors" />
                     </div>
-                    <div className={cn(
-                      "px-3 py-1.5 rounded-xl text-xs font-bold border shadow-sm",
-                      getVoteLevel(d.vote_count)
-                    )}>
-                      {d.vote_count} vote
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </motion.div>
           )}
@@ -866,31 +929,55 @@ export default function App() {
                 className="space-y-6"
               >
               {/* Calendar Grid */}
-              <div className="bg-white rounded-[2rem] p-8 shadow-2xl shadow-brand-dark/5 border border-brand-dark/5">
-                <div className="flex items-center justify-between mb-10">
+              <div className="bg-white rounded-[1.5rem] md:rounded-[2rem] p-4 md:p-8 shadow-2xl shadow-brand-dark/5 border border-brand-dark/5">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 md:mb-10 gap-4">
                   <div>
-                    <h3 className="text-4xl font-serif italic text-brand-dark leading-none mb-1 font-bold">{format(currentMonth, 'MMMM')}</h3>
-                    <p className="text-sm font-extrabold uppercase tracking-[0.3em] text-brand-gold">{format(currentMonth, 'yyyy')}</p>
+                    <h3 className="text-2xl md:text-4xl font-serif italic text-brand-dark leading-none mb-1 font-bold">{format(currentMonth, 'MMMM')}</h3>
+                    <p className="text-xs md:text-sm font-extrabold uppercase tracking-[0.3em] text-brand-gold">{format(currentMonth, 'yyyy')}</p>
                   </div>
-                  <div className="flex gap-3">
-                    <button 
-                      onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
-                      className="w-12 h-12 flex items-center justify-center bg-brand-paper hover:bg-brand-dark hover:text-brand-gold rounded-2xl transition-all border border-brand-dark/5 shadow-sm"
-                    >
-                      <ChevronLeft size={24} strokeWidth={2.5} />
-                    </button>
-                    <button 
-                      onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
-                      className="w-12 h-12 flex items-center justify-center bg-brand-paper hover:bg-brand-dark hover:text-brand-gold rounded-2xl transition-all border border-brand-dark/5 shadow-sm"
-                    >
-                      <ChevronRight size={24} strokeWidth={2.5} />
-                    </button>
+                  <div className="flex flex-wrap items-center gap-2 md:gap-3 w-full sm:w-auto">
+                    {/* Status Toggle */}
+                    <div className="flex bg-brand-paper p-1 rounded-xl border border-brand-dark/5 mr-auto sm:mr-0">
+                      <button 
+                        onClick={() => setVoteStatus('free')}
+                        className={cn(
+                          "px-3 py-1.5 md:px-4 md:py-2 rounded-lg text-[9px] md:text-[10px] font-black uppercase tracking-widest transition-all",
+                          voteStatus === 'free' ? "bg-brand-dark text-brand-gold shadow-lg shadow-brand-dark/20" : "text-brand-dark/30 hover:text-brand-dark"
+                        )}
+                      >
+                        Rảnh
+                      </button>
+                      <button 
+                        onClick={() => setVoteStatus('busy')}
+                        className={cn(
+                          "px-3 py-1.5 md:px-4 md:py-2 rounded-lg text-[9px] md:text-[10px] font-black uppercase tracking-widest transition-all",
+                          voteStatus === 'busy' ? "bg-red-500 text-white shadow-lg shadow-red-500/20" : "text-brand-dark/30 hover:text-brand-dark"
+                        )}
+                      >
+                        Bận
+                      </button>
+                    </div>
+
+                    <div className="flex gap-2 md:gap-3">
+                      <button 
+                        onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
+                        className="w-10 h-10 md:w-12 md:h-12 flex items-center justify-center bg-brand-paper hover:bg-brand-dark hover:text-brand-gold rounded-xl md:rounded-2xl transition-all border border-brand-dark/5 shadow-sm"
+                      >
+                        <ChevronLeft size={20} className="md:w-6 md:h-6" strokeWidth={2.5} />
+                      </button>
+                      <button 
+                        onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
+                        className="w-10 h-10 md:w-12 md:h-12 flex items-center justify-center bg-brand-paper hover:bg-brand-dark hover:text-brand-gold rounded-xl md:rounded-2xl transition-all border border-brand-dark/5 shadow-sm"
+                      >
+                        <ChevronRight size={20} className="md:w-6 md:h-6" strokeWidth={2.5} />
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-7 gap-1 md:gap-4">
+                <div className="grid grid-cols-7 gap-1 md:gap-3">
                   {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map(day => (
-                    <div key={day} className="py-2 text-center text-[9px] md:text-[11px] font-extrabold text-brand-dark uppercase tracking-widest">
+                    <div key={day} className="py-1 md:py-2 text-center text-[8px] md:text-[11px] font-extrabold text-brand-dark uppercase tracking-widest">
                       {day}
                     </div>
                   ))}
@@ -911,48 +998,42 @@ export default function App() {
                           transition: { duration: 0.5, repeat: 2 }
                         } : {}}
                         className={cn(
-                          "relative min-h-[60px] md:h-24 bg-brand-paper rounded-xl md:rounded-2xl p-2 md:p-3 cursor-pointer transition-all hover:scale-[1.02] hover:shadow-xl hover:shadow-brand-dark/5 group/cell border border-transparent flex flex-col items-center justify-center gap-1",
+                          "relative min-h-[50px] sm:min-h-[60px] md:h-24 bg-brand-paper rounded-lg md:rounded-2xl p-1 md:p-3 cursor-pointer transition-all hover:scale-[1.02] hover:shadow-xl hover:shadow-brand-dark/5 group/cell border border-transparent flex flex-col items-center justify-center gap-0.5 md:gap-1",
                           !isCurrentMonth && "opacity-20 grayscale",
-                          isSelected && "ring-2 ring-brand-gold ring-offset-2 md:ring-offset-4 ring-offset-white z-20 border-brand-gold/20 shadow-2xl shadow-brand-gold/10",
-                          appDate && appDate.voters?.split(',').includes(userName) && "bg-brand-gold/10 border-brand-gold/30"
+                          isSelected && "ring-2 ring-brand-gold ring-offset-1 md:ring-offset-4 ring-offset-white z-20 border-brand-gold/20 shadow-2xl shadow-brand-gold/10",
+                          appDate && parseVoters(appDate.voters).some(v => v.name === userName) && "bg-brand-gold/5 border-brand-gold/20"
                         )}
                       >
                         <span className={cn(
-                          "text-sm md:text-lg font-extrabold w-8 h-8 md:w-10 md:h-10 flex items-center justify-center rounded-lg md:rounded-xl transition-colors",
-                          isToday(day) && "bg-brand-dark text-brand-gold shadow-lg shadow-brand-dark/20",
+                          "text-xs md:text-lg font-extrabold w-6 h-6 md:w-10 md:h-10 flex items-center justify-center rounded-md md:rounded-xl transition-all",
+                          isToday(day) && "border-2 border-brand-dark text-brand-dark",
                           !isToday(day) && isCurrentMonth && "text-brand-dark group-hover/cell:text-brand-dark",
-                          appDate && appDate.voters?.split(',').includes(userName) && "text-brand-gold bg-brand-dark"
+                          appDate && parseVoters(appDate.voters).find(v => v.name === userName)?.status === 'free' && "text-brand-dark bg-brand-gold shadow-lg shadow-brand-gold/20 border-0",
+                          appDate && parseVoters(appDate.voters).find(v => v.name === userName)?.status === 'busy' && "text-white bg-red-500 shadow-lg shadow-red-500/20 border-0"
                         )}>
                           {format(day, 'd')}
                         </span>
                         
                         {appDate && (
-                          <div className={cn(
-                            "text-[10px] md:text-xs px-2 py-0.5 rounded-full font-black border shadow-sm",
-                            getVoteLevel(appDate.vote_count) || "bg-white text-brand-dark/40 border-brand-dark/5"
-                          )}>
-                            {appDate.vote_count}
+                          <div className="flex gap-1">
+                            {appDate.vote_count > 0 && (
+                              <div className={cn(
+                                "text-[7px] md:text-[10px] px-1 md:px-2 py-0.5 rounded-full font-black border shadow-sm",
+                                getVoteLevel(appDate.vote_count) || "bg-white text-brand-dark/40 border-brand-dark/5"
+                              )}>
+                                {appDate.vote_count}
+                              </div>
+                            )}
+                            {parseVoters(appDate.voters).filter(v => v.status === 'busy').length > 0 && (
+                              <div className="text-[7px] md:text-[10px] px-1 md:px-2 py-0.5 rounded-full font-black bg-red-50 text-red-600 border border-red-100 shadow-sm">
+                                {parseVoters(appDate.voters).filter(v => v.status === 'busy').length}
+                              </div>
+                            )}
                           </div>
                         )}
                       </motion.div>
                     );
                   })}
-                </div>
-                
-                {/* Legend */}
-                <div className="mt-10 flex items-center gap-6 text-[11px] font-extrabold uppercase tracking-widest text-brand-dark/30">
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded-md bg-emerald-100 border border-emerald-200"></div>
-                    <span>Thấp</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded-md bg-emerald-300 border border-emerald-400"></div>
-                    <span>Vừa</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded-md bg-emerald-500 border border-emerald-600"></div>
-                    <span>Cao</span>
-                  </div>
                 </div>
               </div>
 
@@ -974,25 +1055,75 @@ export default function App() {
                   </div>
                   
                   {selectedAppointment.dates?.find(d => d.date === format(selectedDate, 'yyyy-MM-dd')) ? (
-                    <div className="space-y-6">
-                      <div className="flex flex-wrap gap-3">
-                        {selectedAppointment.dates?.find(d => d.date === format(selectedDate, 'yyyy-MM-dd'))?.voters?.split(',').map((voter, i) => (
-                          <motion.span 
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            transition={{ delay: i * 0.05 }}
-                            key={i} 
-                            className="px-5 py-2.5 bg-brand-paper rounded-2xl text-sm font-bold border border-brand-dark/5 shadow-sm flex items-center gap-2"
-                          >
-                            <div className="w-2 h-2 rounded-full bg-brand-gold"></div>
-                            {voter}
-                          </motion.span>
-                        )) || <p className="text-sm text-brand-dark/30 italic">Chưa có ai vote ngày này.</p>}
+                    <div className="space-y-8">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        {/* Free Column */}
+                        <div className="space-y-4">
+                          <div className="flex items-center gap-2 mb-4">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                            <p className="text-[10px] uppercase tracking-widest font-black text-brand-dark/30">Anh em rảnh</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {parseVoters(selectedAppointment.dates?.find(d => d.date === format(selectedDate, 'yyyy-MM-dd'))?.voters)
+                              .filter(v => v.status === 'free')
+                              .map((v, i) => (
+                                <motion.span 
+                                  initial={{ scale: 0.9, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  transition={{ delay: i * 0.05 }}
+                                  key={i} 
+                                  className="px-4 py-2 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-bold border border-emerald-100 shadow-sm"
+                                >
+                                  {v.name}
+                                </motion.span>
+                              ))}
+                            {parseVoters(selectedAppointment.dates?.find(d => d.date === format(selectedDate, 'yyyy-MM-dd'))?.voters)
+                              .filter(v => v.status === 'free').length === 0 && (
+                                <p className="text-xs text-brand-dark/20 italic">Chưa có ai rảnh</p>
+                              )}
+                          </div>
+                        </div>
+
+                        {/* Busy Column */}
+                        <div className="space-y-4">
+                          <div className="flex items-center gap-2 mb-4">
+                            <div className="w-2 h-2 rounded-full bg-red-500" />
+                            <p className="text-[10px] uppercase tracking-widest font-black text-brand-dark/30">Anh em bận</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {parseVoters(selectedAppointment.dates?.find(d => d.date === format(selectedDate, 'yyyy-MM-dd'))?.voters)
+                              .filter(v => v.status === 'busy')
+                              .map((v, i) => (
+                                <motion.span 
+                                  initial={{ scale: 0.9, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  transition={{ delay: i * 0.05 }}
+                                  key={i} 
+                                  className="px-4 py-2 bg-red-50 text-red-700 rounded-xl text-xs font-bold border border-red-100 shadow-sm"
+                                >
+                                  {v.name}
+                                </motion.span>
+                              ))}
+                            {parseVoters(selectedAppointment.dates?.find(d => d.date === format(selectedDate, 'yyyy-MM-dd'))?.voters)
+                              .filter(v => v.status === 'busy').length === 0 && (
+                                <p className="text-xs text-brand-dark/20 italic">Chưa có ai bận</p>
+                              )}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ) : (
-                    <div className="py-8 text-center bg-brand-paper rounded-2xl border border-dashed border-brand-dark/10">
-                      <p className="text-sm text-brand-dark/40 font-medium">Nhấn vào ngày để thêm vào danh sách bình chọn.</p>
+                    <div className="py-12 text-center bg-brand-paper rounded-[2rem] border border-dashed border-brand-dark/10">
+                      <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+                        <CalendarIcon size={24} className="text-brand-dark/20" />
+                      </div>
+                      <p className="text-sm text-brand-dark/40 font-bold mb-6">Ngày này chưa có ai bình chọn.</p>
+                      <button
+                        onClick={() => handleToggleVote(selectedDate)}
+                        className="px-8 py-3 bg-brand-dark text-brand-gold rounded-xl font-extrabold shadow-lg shadow-brand-dark/20 hover:scale-105 transition-all"
+                      >
+                        Bình chọn ngay
+                      </button>
                     </div>
                   )}
                 </motion.div>
@@ -1025,7 +1156,7 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative bg-white rounded-[2rem] p-8 w-full max-w-md shadow-2xl border border-brand-dark/5"
+              className="relative bg-white rounded-[1.5rem] md:rounded-[2rem] p-6 md:p-8 w-full max-w-md shadow-2xl border border-brand-dark/5 mx-auto"
             >
               <h2 className="text-2xl font-serif italic mb-2 text-brand-dark">Xác nhận tạo buổi hẹn</h2>
               <p className="text-sm text-brand-dark/60 mb-6 font-bold">Bạn đang tạo: <span className="text-brand-gold">{newAppointmentTitle}</span></p>
@@ -1074,7 +1205,7 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative bg-white rounded-[2rem] p-8 w-full max-w-md shadow-2xl border border-brand-dark/5"
+              className="relative bg-white rounded-[1.5rem] md:rounded-[2rem] p-6 md:p-8 w-full max-w-md shadow-2xl border border-brand-dark/5 mx-auto"
             >
               <h2 className="text-2xl font-serif italic mb-2 text-brand-dark">Xác nhận xoá</h2>
               <p className="text-sm text-brand-dark/60 mb-6 font-bold">Vui lòng nhập mật khẩu để xoá buổi hẹn này.</p>
@@ -1123,7 +1254,7 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative bg-white rounded-[2rem] p-8 w-full max-w-lg shadow-2xl border border-brand-dark/5"
+              className="relative bg-white rounded-[1.5rem] md:rounded-[2rem] p-6 md:p-8 w-full max-w-lg shadow-2xl border border-brand-dark/5 mx-auto"
             >
               <h2 className="text-2xl font-serif italic mb-2 text-brand-dark">Chốt kèo nhậu</h2>
               <p className="text-sm text-brand-dark/60 mb-6 font-bold">Chọn ngày và quán cuối cùng để chốt lịch.</p>
